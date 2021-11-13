@@ -2,17 +2,19 @@ import torch
 import torch.utils.data
 from torch import nn, optim
 from torch.autograd import Variable
+from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
 
-from dataloader import RNA_Dataset, ATAC_Dataset
-from dataloader import NucleiDatasetNew as NucleiDataset
+#from dataloader import RNA_Dataset, ATAC_Dataset
+#from dataloader import NucleiDatasetNew as NucleiDataset
 from model import FC_Autoencoder, FC_Classifier, VAE, FC_VAE, Simple_Classifier
 
-from dataloader import create_dataloaders
+#from dataloader import create_dataloaders
 
 import os
 import argparse
 import numpy as np
-import imageio
+#import imageio
 import scanpy as sc
 
 torch.manual_seed(1)
@@ -24,16 +26,17 @@ def setup_args():
     options = argparse.ArgumentParser()
 
     # save and directory options
-    options.add_argument('-sd', '--save-dir', action="store", dest="save_dir")
+    options.add_argument('--save-dir', action="store", default="./", dest="save_dir")
     options.add_argument('--save-freq', action="store", dest="save_freq", default=20, type=int)
-    options.add_argument('--pretrained-file', action="store")
+    options.add_argument('--pretrained-file', default="./models/pretrain/91.pth",
+                         action="store")
 
     # training parameters
     options.add_argument('-bs', '--batch-size', action="store", dest="batch_size", default=32, type=int)
     options.add_argument('-w', '--num-workers', action="store", dest="num_workers", default=10, type=int)
     options.add_argument('-lrAE', '--learning-rate-AE', action="store", dest="learning_rate_AE", default=1e-4, type=float)
     options.add_argument('-lrD', '--learning-rate-D', action="store", dest="learning_rate_D", default=1e-4, type=float)
-    options.add_argument('-e', '--max-epochs', action="store", dest="max_epochs", default=1000, type=int)
+    options.add_argument('-e', '--max-epochs', action="store", dest="max_epochs", default=100, type=int)
     options.add_argument('-wd', '--weight-decay', action="store", dest="weight_decay", default=0, type=float)
     options.add_argument('--train-atacnet', action="store_true")
     options.add_argument('--conditional', action="store_true")
@@ -50,7 +53,7 @@ def setup_args():
 
     return options.parse_args()
 
-
+torch.cuda.set_device(4)
 args = setup_args()
 if not torch.cuda.is_available():
     args.use_gpu = False
@@ -59,10 +62,59 @@ os.makedirs(args.save_dir, exist_ok=True)
 
 #============= TRAINING INITIALIZATION ==============
 
-# initialize autoencoder
-netRNA = FC_VAE(n_input=7633, nz=args.latent_dims)
+class scDataset(Dataset):
+    def __init__(self, adata):
+        self.X = torch.Tensor(adata.X.toarray())
+        #self.labels = torch.Tensor(adata.obs.cell_type)
+        
+    def __len__(self):
+        return self.X.shape[0]
 
-netATAC = FC_VAE(n_input=62066, nz=args.latent_dims)
+    def __getitem__(self, idx):
+        atac_sample = self.X[idx]
+        return {'tensor': atac_sample.float()}
+        """
+        cluster = self.labels[idx]
+        return {'tensor': atac_sample.float(), 'binary_label': int(cluster)}
+        """
+
+def create_dataloaders(gex, atac):
+    print("Setting up dataloaders")
+
+    idx = np.arange(len(gex))
+    trainval, test_idx = train_test_split(idx, test_size=0.10, shuffle=True)
+    train_idx, val_idx = train_test_split(trainval, test_size=0.10, shuffle=True)
+
+    gex_train = gex[train_idx]
+    gex_val = gex[val_idx]
+    gex_test = gex[test_idx]
+    
+    atac_train = atac[train_idx]
+    atac_val = atac[val_idx]
+    atac_test = atac[test_idx]
+
+    atac_loader = DataLoader(scDataset(atac_train), batch_size=args.batch_size, shuffle=False)
+    atac_loader_val = DataLoader(scDataset(atac_val), batch_size=args.batch_size, shuffle=False)
+    atac_loader_test = DataLoader(scDataset(atac_test), batch_size=args.batch_size, shuffle=False)
+    
+    genomics_loader = DataLoader(scDataset(gex_train), batch_size=args.batch_size, shuffle=False)
+    genomics_loader_val = DataLoader(scDataset(gex_val), batch_size=args.batch_size, shuffle=False)
+    genomics_loader_test = DataLoader(scDataset(gex_test), batch_size=args.batch_size, shuffle=False)
+
+    return (atac_loader, atac_loader_val, atac_loader_test),\
+           (genomics_loader, genomics_loader_val, genomics_loader_test)
+
+gex1 = sc.read_h5ad('../multiome/multiome_gex_processed_training.h5ad')
+atac = sc.read_h5ad('../multiome/multiome_atac_processed_training.h5ad')
+atac_loaders, genomics_loaders = create_dataloaders(gex1, atac)
+atac_loader, atac_loader_val, atac_loader_test = atac_loaders
+genomics_loader, genomics_loader_val, genomics_loader_test = genomics_loaders
+
+
+# initialize autoencoder
+netRNA = FC_VAE(n_input=gex1.shape[1], nz=args.latent_dims)
+
+netATAC = FC_VAE(n_input=atac.shape[1], nz=args.latent_dims)
 netATAC.load_state_dict(torch.load(args.pretrained_file))
 print("Pre-trained model loaded from %s" % args.pretrained_file)
 
@@ -82,13 +134,15 @@ if args.use_gpu:
     if args.conditional:
         netCondClf.cuda()
 
+        
 # load data
+"""
 genomics_dataset = RNA_Dataset(datadir="data/nCD4_gene_exp_matrices/")
 atac_dataset = ATAC_Dataset(datadir="data/atac_seq_data/")
 
 atac_loader = torch.utils.data.DataLoader(atac_dataset, batch_size=args.batch_size, drop_last=True, shuffle=True)
 genomics_loader = torch.utils.data.DataLoader(genomics_dataset, batch_size=args.batch_size, drop_last=True, shuffle=True)
-
+"""
 
 # Our data
 # Gene Expression Dataset 1 (GEX1)
@@ -111,7 +165,7 @@ criterion_reconstruct = nn.MSELoss()
 criterion_classify = nn.CrossEntropyLoss()
 
 # setup logger
-with open(os.path.join(args.save_dir, 'log.txt'), 'w') as f:
+with open(os.path.join(args.save_dir, 'log_rna_atac.txt'), 'w') as f:
     print(args, file=f)
     print(netRNA, file=f)
     print(netATAC, file=f)
