@@ -7,3 +7,6 @@ https://openproblems.bio/neurips_docs/data/dataset/
 https://anndata.readthedocs.io/en/latest/.
   These are essentially data matrices (adata.X) where each row is a cell and each column is a feature. Along with the data matrix, the AnnData object also contains a dataframe (adata.obs) with metadata for each cell as well as another dataframe (adata.var)with metadata for each feature.
 
+Final results were produced using:
+- VAE: model/VAE_trainer.py
+- c-GAN: notebooks/conditional_gan.py
