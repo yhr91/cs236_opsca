@@ -10,3 +10,4 @@ https://anndata.readthedocs.io/en/latest/.
 Final results were produced using:
 - VAE: model/VAE_trainer.py
 - c-GAN: notebooks/conditional_gan.py
+- Cond VAE: model/Cond_VAE_trainer_v1.py model/Cond_VAE_train_v2.py
